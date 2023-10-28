@@ -17,17 +17,18 @@ macro_rules! make_writer {
         /// serialized size prefixed to the serialized data). The default is [`SyncDestination`], but these
         /// can be easily toggled between using [`AsyncBincodeWriter::for_async`].
         #[derive(Debug)]
-        pub struct AsyncBincodeWriter<W, T, D> {
+        pub struct AsyncBincodeWriter<W, T, D, O> {
             pub(crate) writer: W,
             pub(crate) written: usize,
             pub(crate) buffer: Vec<u8>,
+            pub(crate) options: O,
             pub(crate) from: std::marker::PhantomData<T>,
             pub(crate) dest: std::marker::PhantomData<D>,
         }
 
-        impl<W, T, D> Unpin for AsyncBincodeWriter<W, T, D> where W: Unpin {}
+        impl<W, T, D, O> Unpin for AsyncBincodeWriter<W, T, D, O> where W: Unpin {}
 
-        impl<W, T> Default for AsyncBincodeWriter<W, T, SyncDestination>
+        impl<W, T> Default for AsyncBincodeWriter<W, T, SyncDestination, DefaultOptions>
         where
             W: Default,
         {
@@ -36,7 +37,7 @@ macro_rules! make_writer {
             }
         }
 
-        impl<W, T, D> AsyncBincodeWriter<W, T, D> {
+        impl<W, T, D, O> AsyncBincodeWriter<W, T, D, O> {
             /// Gets a reference to the underlying writer.
             ///
             /// It is inadvisable to directly write to the underlying writer.
@@ -57,78 +58,97 @@ macro_rules! make_writer {
             pub fn into_inner(self) -> W {
                 self.writer
             }
+
+            fn into_inner_and_options(self) -> (W, O) {
+                (self.writer, self.options)
+            }
         }
 
-        impl<W, T> From<W> for AsyncBincodeWriter<W, T, SyncDestination> {
+        impl<W, T> From<W> for AsyncBincodeWriter<W, T, SyncDestination, DefaultOptions> {
             fn from(writer: W) -> Self {
                 Self {
                     buffer: Vec::new(),
                     writer,
                     written: 0,
+                    options: bincode::options(),
                     from: std::marker::PhantomData,
                     dest: std::marker::PhantomData,
                 }
             }
         }
 
-        impl<W, T> AsyncBincodeWriter<W, T, SyncDestination> {
+        impl<W, T, O> From<(W, O)> for AsyncBincodeWriter<W, T, SyncDestination, O> {
+            fn from((writer, options): (W, O)) -> Self {
+                Self {
+                    buffer: Vec::new(),
+                    writer,
+                    written: 0,
+                    options,
+                    from: std::marker::PhantomData,
+                    dest: std::marker::PhantomData,
+                }
+            }
+        }
+
+        impl<W, T, O> AsyncBincodeWriter<W, T, SyncDestination, O> {
             /// Make this writer include the serialized data's size before each serialized value.
             ///
             /// This is necessary for compatibility with [`AsyncBincodeReader`].
-            pub fn for_async(self) -> AsyncBincodeWriter<W, T, AsyncDestination> {
+            pub fn for_async(self) -> AsyncBincodeWriter<W, T, AsyncDestination, O> {
                 self.make_for()
             }
         }
 
-        impl<W, T> AsyncBincodeWriter<W, T, AsyncDestination> {
+        impl<W, T, O> AsyncBincodeWriter<W, T, AsyncDestination, O> {
             /// Make this writer only send bincode-encoded values.
             ///
             /// This is necessary for compatibility with stock `bincode` receivers.
-            pub fn for_sync(self) -> AsyncBincodeWriter<W, T, SyncDestination> {
+            pub fn for_sync(self) -> AsyncBincodeWriter<W, T, SyncDestination, O> {
                 self.make_for()
             }
         }
 
-        impl<W, T, D> AsyncBincodeWriter<W, T, D> {
-            pub(crate) fn make_for<D2>(self) -> AsyncBincodeWriter<W, T, D2> {
+        impl<W, T, D, O> AsyncBincodeWriter<W, T, D, O> {
+            pub(crate) fn make_for<D2>(self) -> AsyncBincodeWriter<W, T, D2, O> {
                 AsyncBincodeWriter {
                     buffer: self.buffer,
                     writer: self.writer,
                     written: self.written,
+                    options: self.options,
                     from: self.from,
                     dest: std::marker::PhantomData,
                 }
             }
         }
 
-        impl<W, T> BincodeWriterFor<T> for AsyncBincodeWriter<W, T, AsyncDestination>
+        impl<W, T, O> BincodeWriterFor<T> for AsyncBincodeWriter<W, T, AsyncDestination, O>
         where
             T: serde::Serialize,
+            O: Options + Copy,
         {
             fn append(&mut self, item: T) -> Result<(), bincode::Error> {
-                use bincode::Options;
                 use byteorder::{NetworkEndian, WriteBytesExt};
-                let c = bincode::options()
-                    .with_limit(u32::max_value() as u64)
-                    .allow_trailing_bytes();
-                let size = c.serialized_size(&item)? as u32;
+                /*let c = bincode::options()
+                .with_limit(u32::max_value() as u64)
+                .allow_trailing_bytes();*/
+                let size = self.options.serialized_size(&item)? as u32;
                 self.buffer.write_u32::<NetworkEndian>(size)?;
-                c.serialize_into(&mut self.buffer, &item)
+                self.options.serialize_into(&mut self.buffer, &item)
             }
         }
 
-        impl<W, T> BincodeWriterFor<T> for AsyncBincodeWriter<W, T, SyncDestination>
+        impl<W, T, O> BincodeWriterFor<T> for AsyncBincodeWriter<W, T, SyncDestination, O>
         where
             T: serde::Serialize,
+            O: Options + Copy,
         {
             fn append(&mut self, item: T) -> Result<(), bincode::Error> {
-                use bincode::Options;
-                let c = bincode::options().allow_trailing_bytes();
-                c.serialize_into(&mut self.buffer, &item)
+                //let c = bincode::options().allow_trailing_bytes();
+                self.options.serialize_into(&mut self.buffer, &item)
             }
         }
 
-        impl<W, T, D> futures_sink::Sink<T> for AsyncBincodeWriter<W, T, D>
+        impl<W, T, D, O> futures_sink::Sink<T> for AsyncBincodeWriter<W, T, D, O>
         where
             T: serde::Serialize,
             W: $write_trait + Unpin,

@@ -46,14 +46,14 @@ mod futures_tests {
 
         async_std::task::spawn(async move {
             let (stream, _) = echo.accept().await.unwrap();
-            let mut stream = AsyncBincodeStream::<_, usize, usize, _>::from(stream).for_async();
+            let mut stream = AsyncBincodeStream::<_, usize, usize, _, _>::from(stream).for_async();
             while let Some(item) = stream.next().await {
                 stream.send(item.unwrap()).await.unwrap();
             }
         });
 
         let client = async_std::net::TcpStream::connect(&addr).await.unwrap();
-        let mut client = AsyncBincodeStream::<_, usize, usize, _>::from(client).for_async();
+        let mut client = AsyncBincodeStream::<_, usize, usize, _, _>::from(client).for_async();
         client.send(42).await.unwrap();
         assert_eq!(client.next().await.unwrap().unwrap(), 42);
 
@@ -72,7 +72,7 @@ mod futures_tests {
 
         async_std::task::spawn(async move {
             let (stream, _) = echo.accept().await.unwrap();
-            let mut stream = AsyncBincodeStream::<_, usize, usize, _>::from(stream).for_async();
+            let mut stream = AsyncBincodeStream::<_, usize, usize, _, _>::from(stream).for_async();
             while let Some(item) = stream.next().await {
                 stream.send(item.unwrap()).await.unwrap();
             }
@@ -114,13 +114,13 @@ mod tokio_tests {
 
         tokio::spawn(async move {
             let (stream, _) = echo.accept().await.unwrap();
-            let mut stream = AsyncBincodeStream::<_, usize, usize, _>::from(stream).for_async();
+            let mut stream = AsyncBincodeStream::<_, usize, usize, _, _>::from(stream).for_async();
             let (r, w) = stream.tcp_split();
             r.forward(w).await.unwrap();
         });
 
         let client = tokio::net::TcpStream::connect(&addr).await.unwrap();
-        let mut client = AsyncBincodeStream::<_, usize, usize, _>::from(client).for_async();
+        let mut client = AsyncBincodeStream::<_, usize, usize, _, _>::from(client).for_async();
         client.send(42).await.unwrap();
         assert_eq!(client.next().await.unwrap().unwrap(), 42);
 
@@ -137,8 +137,8 @@ mod tokio_tests {
 
         tokio::spawn(async move {
             let (stream, _) = echo.accept().await.unwrap();
-            let stream =
-                AsyncBincodeStream::<_, usize, usize, _>::from(BufStream::new(stream)).for_async();
+            let stream = AsyncBincodeStream::<_, usize, usize, _, _>::from(BufStream::new(stream))
+                .for_async();
             let (w, r) = stream.split();
             r.forward(w).await.unwrap();
         });

@@ -22,11 +22,11 @@ macro_rules! make_reader {
         /// `bincode::serialized_size` encoded as a four-byte network-endian encoded. See also
         /// [`serialize_into`], which does this for you.
         #[derive(Debug)]
-        pub struct AsyncBincodeReader<R, T>(crate::reader::AsyncBincodeReader<R, T>);
+        pub struct AsyncBincodeReader<R, T, O>(crate::reader::AsyncBincodeReader<R, T, O>);
 
-        impl<R, T> Unpin for AsyncBincodeReader<R, T> where R: Unpin {}
+        impl<R, T, O> Unpin for AsyncBincodeReader<R, T, O> where R: Unpin {}
 
-        impl<R, T> Default for AsyncBincodeReader<R, T>
+        impl<R, T> Default for AsyncBincodeReader<R, T, DefaultOptions>
         where
             R: Default,
         {
@@ -35,17 +35,29 @@ macro_rules! make_reader {
             }
         }
 
-        impl<R, T> From<R> for AsyncBincodeReader<R, T> {
+        impl<R, T> From<R> for AsyncBincodeReader<R, T, DefaultOptions> {
             fn from(reader: R) -> Self {
                 Self(crate::reader::AsyncBincodeReader {
                     buffer: ::bytes::BytesMut::with_capacity(8192),
                     reader,
+                    options: bincode::options(),
                     into: ::std::marker::PhantomData,
                 })
             }
         }
 
-        impl<R, T> AsyncBincodeReader<R, T> {
+        impl<R, T, O> From<(R, O)> for AsyncBincodeReader<R, T, O> {
+            fn from((reader, options): (R, O)) -> Self {
+                Self(crate::reader::AsyncBincodeReader {
+                    buffer: ::bytes::BytesMut::with_capacity(8192),
+                    reader,
+                    options,
+                    into: ::std::marker::PhantomData,
+                })
+            }
+        }
+
+        impl<R, T, O> AsyncBincodeReader<R, T, O> {
             /// Gets a reference to the underlying reader.
             ///
             /// It is inadvisable to directly read from the underlying reader.
@@ -75,10 +87,11 @@ macro_rules! make_reader {
             }
         }
 
-        impl<R, T> ::futures_core::Stream for AsyncBincodeReader<R, T>
+        impl<R, T, O> ::futures_core::Stream for AsyncBincodeReader<R, T, O>
         where
             for<'a> T: ::serde::Deserialize<'a>,
             R: $read_trait + Unpin,
+            O: Options + Copy,
         {
             type Item = Result<T, bincode::Error>;
             fn poll_next(
@@ -92,20 +105,21 @@ macro_rules! make_reader {
 }
 
 #[derive(Debug)]
-pub(crate) struct AsyncBincodeReader<R, T> {
+pub(crate) struct AsyncBincodeReader<R, T, O> {
     pub(crate) reader: R,
     pub(crate) buffer: BytesMut,
+    pub(crate) options: O,
     pub(crate) into: PhantomData<T>,
 }
 
-impl<R, T> Unpin for AsyncBincodeReader<R, T> where R: Unpin {}
+impl<R, T, O> Unpin for AsyncBincodeReader<R, T, O> where R: Unpin {}
 
 enum FillResult {
     Filled,
     EOF,
 }
 
-impl<R: Unpin, T> AsyncBincodeReader<R, T>
+impl<R: Unpin, T, O> AsyncBincodeReader<R, T, O>
 where
     for<'a> T: Deserialize<'a>,
 {
@@ -116,6 +130,7 @@ where
     ) -> Poll<Option<Result<T, bincode::Error>>>
     where
         F: Fn(Pin<&mut R>, &mut Context, &mut [u8]) -> Poll<Result<usize, io::Error>> + Copy,
+        O: Options + Copy,
     {
         if let FillResult::EOF = ready!(self
             .as_mut()
@@ -135,9 +150,8 @@ where
             .map_err(bincode::Error::from))?;
 
         self.buffer.advance(4);
-        let message = bincode::options()
-            .with_limit(u32::max_value() as u64)
-            .allow_trailing_bytes()
+        let message = self
+            .options
             .deserialize(&self.buffer[..target_buffer_size])?;
         self.buffer.advance(target_buffer_size);
         Poll::Ready(Some(Ok(message)))

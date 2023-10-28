@@ -1,6 +1,8 @@
 //! Asynchronous access to a bincode-encoded item stream using `futures_io`. See the top-level
 //! documentation and the documentation for [`AsyncBincodeReader`], [`AsyncBincodeWriter`], and
 //! [`AsyncBincodeStream`].
+use bincode::config::DefaultOptions;
+use bincode::Options;
 
 make_reader!(futures_io::AsyncRead, internal_poll_reader);
 make_writer!(futures_io::AsyncWrite, poll_close);

@@ -1,6 +1,8 @@
 //! Asynchronous access to a bincode-encoded item stream using `tokio`. See the top-level
 //! documentation and the documentation for [`AsyncBincodeReader`], [`AsyncBincodeWriter`], and
 //! [`AsyncBincodeStream`].
+use bincode::config::DefaultOptions;
+use bincode::Options;
 
 make_reader!(tokio::io::AsyncRead, internal_poll_reader);
 make_writer!(tokio::io::AsyncWrite, poll_shutdown);
@@ -25,7 +27,7 @@ where
     std::task::Poll::Ready(Ok(n))
 }
 
-impl<R, W, D> AsyncBincodeStream<tokio::net::TcpStream, R, W, D> {
+impl<R, W, D, O> AsyncBincodeStream<tokio::net::TcpStream, R, W, D, O> {
     /// Split a TCP-based stream into a read half and a write half.
     ///
     /// This is more performant than using a lock-based split like the one provided by `tokio-io`
@@ -36,12 +38,17 @@ impl<R, W, D> AsyncBincodeStream<tokio::net::TcpStream, R, W, D> {
     pub fn tcp_split(
         &mut self,
     ) -> (
-        AsyncBincodeReader<tokio::net::tcp::ReadHalf, R>,
-        AsyncBincodeWriter<tokio::net::tcp::WriteHalf, W, D>,
-    ) {
+        AsyncBincodeReader<tokio::net::tcp::ReadHalf, R, O>,
+        AsyncBincodeWriter<tokio::net::tcp::WriteHalf, W, D, O>,
+    )
+    where
+        O: Copy,
+    {
         // First, steal the reader state so it isn't lost
         let rbuff = self.stream.0.buffer.split();
+        let r_opt = self.stream.0.options;
         // Then, fish out the writer
+        let w_opt = self.stream.0.options;
         let writer = &mut self.stream.get_mut().0;
         // And steal the writer state so it isn't lost
         let wbuff = writer.buffer.split_off(0);
@@ -49,10 +56,11 @@ impl<R, W, D> AsyncBincodeStream<tokio::net::TcpStream, R, W, D> {
         // Now split the stream
         let (r, w) = writer.get_mut().split();
         // Then put the reader back together
-        let mut reader = AsyncBincodeReader::from(r);
+        let mut reader = AsyncBincodeReader::from((r, r_opt));
         reader.0.buffer = rbuff;
         // And then the writer
-        let mut writer: AsyncBincodeWriter<_, _, D> = AsyncBincodeWriter::from(w).make_for();
+        let mut writer: AsyncBincodeWriter<_, _, D, O> =
+            AsyncBincodeWriter::from((w, w_opt)).make_for();
         writer.buffer = wbuff;
         writer.written = wsize;
         // All good!

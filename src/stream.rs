@@ -13,20 +13,20 @@ macro_rules! make_stream {
         /// [`crate::SyncDestination`], but these can be easily toggled between using
         /// [`AsyncBincodeStream::for_async`].
         #[derive(Debug)]
-        pub struct AsyncBincodeStream<S, R, W, D> {
-            stream: AsyncBincodeReader<InternalAsyncWriter<S, W, D>, R>,
+        pub struct AsyncBincodeStream<S, R, W, D, O> {
+            stream: AsyncBincodeReader<InternalAsyncWriter<S, W, D, O>, R, O>,
         }
 
         #[doc(hidden)]
-        pub struct InternalAsyncWriter<S, T, D>(AsyncBincodeWriter<S, T, D>);
+        pub struct InternalAsyncWriter<S, T, D, O>(AsyncBincodeWriter<S, T, D, O>);
 
-        impl<S: std::fmt::Debug, T, D> std::fmt::Debug for InternalAsyncWriter<S, T, D> {
+        impl<S: std::fmt::Debug, T, D, O> std::fmt::Debug for InternalAsyncWriter<S, T, D, O> {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 self.get_ref().fmt(f)
             }
         }
 
-        impl<S, R, W> Default for AsyncBincodeStream<S, R, W, SyncDestination>
+        impl<S, R, W> Default for AsyncBincodeStream<S, R, W, SyncDestination, DefaultOptions>
         where
             S: Default,
         {
@@ -35,7 +35,7 @@ macro_rules! make_stream {
             }
         }
 
-        impl<S, R, W, D> AsyncBincodeStream<S, R, W, D> {
+        impl<S, R, W, D, O> AsyncBincodeStream<S, R, W, D, O> {
             /// Gets a reference to the underlying stream.
             ///
             /// It is inadvisable to directly read from or write to the underlying stream.
@@ -57,9 +57,13 @@ macro_rules! make_stream {
             pub fn into_inner(self) -> S {
                 self.stream.into_inner().0.into_inner()
             }
+
+            fn into_inner_and_options(self) -> (S, O) {
+                self.stream.into_inner().0.into_inner_and_options()
+            }
         }
 
-        impl<S, R, W> From<S> for AsyncBincodeStream<S, R, W, SyncDestination> {
+        impl<S, R, W> From<S> for AsyncBincodeStream<S, R, W, SyncDestination, DefaultOptions> {
             fn from(stream: S) -> Self {
                 AsyncBincodeStream {
                     stream: AsyncBincodeReader::from(InternalAsyncWriter(
@@ -69,15 +73,35 @@ macro_rules! make_stream {
             }
         }
 
-        impl<S, R, W, D> AsyncBincodeStream<S, R, W, D> {
+        impl<S, R, W, O> From<(S, O)> for AsyncBincodeStream<S, R, W, SyncDestination, O>
+        where
+            O: Copy,
+        {
+            fn from((stream, options): (S, O)) -> Self {
+                AsyncBincodeStream {
+                    stream: AsyncBincodeReader::from((
+                        InternalAsyncWriter(AsyncBincodeWriter::from((stream, options))),
+                        options,
+                    )),
+                }
+            }
+        }
+
+        impl<S, R, W, D, O> AsyncBincodeStream<S, R, W, D, O>
+        where
+            O: Copy,
+        {
             /// Make this stream include the serialized data's size before each serialized value.
             ///
             /// This is necessary for compatability with a remote [`AsyncBincodeReader`].
-            pub fn for_async(self) -> AsyncBincodeStream<S, R, W, crate::AsyncDestination> {
-                let stream = self.into_inner();
+            pub fn for_async(self) -> AsyncBincodeStream<S, R, W, crate::AsyncDestination, O> {
+                let (stream, options) = self.into_inner_and_options();
                 AsyncBincodeStream {
-                    stream: AsyncBincodeReader::from(InternalAsyncWriter(
-                        AsyncBincodeWriter::from(stream).for_async(),
+                    stream: AsyncBincodeReader::from((
+                        InternalAsyncWriter(
+                            AsyncBincodeWriter::from((stream, options)).for_async(),
+                        ),
+                        options,
                     )),
                 }
             }
@@ -85,12 +109,12 @@ macro_rules! make_stream {
             /// Make this stream only send bincode-encoded values.
             ///
             /// This is necessary for compatability with stock `bincode` receivers.
-            pub fn for_sync(self) -> AsyncBincodeStream<S, R, W, crate::SyncDestination> {
-                AsyncBincodeStream::from(self.into_inner())
+            pub fn for_sync(self) -> AsyncBincodeStream<S, R, W, crate::SyncDestination, O> {
+                AsyncBincodeStream::from(self.into_inner_and_options())
             }
         }
 
-        impl<S, T, D> $read_trait for InternalAsyncWriter<S, T, D>
+        impl<S, T, D, O> $read_trait for InternalAsyncWriter<S, T, D, O>
         where
             S: $read_trait + Unpin,
         {
@@ -103,23 +127,24 @@ macro_rules! make_stream {
             }
         }
 
-        impl<S, T, D> std::ops::Deref for InternalAsyncWriter<S, T, D> {
-            type Target = AsyncBincodeWriter<S, T, D>;
+        impl<S, T, D, O> std::ops::Deref for InternalAsyncWriter<S, T, D, O> {
+            type Target = AsyncBincodeWriter<S, T, D, O>;
             fn deref(&self) -> &Self::Target {
                 &self.0
             }
         }
-        impl<S, T, D> std::ops::DerefMut for InternalAsyncWriter<S, T, D> {
+        impl<S, T, D, O> std::ops::DerefMut for InternalAsyncWriter<S, T, D, O> {
             fn deref_mut(&mut self) -> &mut Self::Target {
                 &mut self.0
             }
         }
 
-        impl<S, R, W, D> futures_core::Stream for AsyncBincodeStream<S, R, W, D>
+        impl<S, R, W, D, O> futures_core::Stream for AsyncBincodeStream<S, R, W, D, O>
         where
             S: Unpin,
-            AsyncBincodeReader<InternalAsyncWriter<S, W, D>, R>:
+            AsyncBincodeReader<InternalAsyncWriter<S, W, D, O>, R, O>:
                 futures_core::Stream<Item = Result<R, bincode::Error>>,
+            O: Options,
         {
             type Item = Result<R, bincode::Error>;
             fn poll_next(
@@ -130,10 +155,11 @@ macro_rules! make_stream {
             }
         }
 
-        impl<S, R, W, D> futures_sink::Sink<W> for AsyncBincodeStream<S, R, W, D>
+        impl<S, R, W, D, O> futures_sink::Sink<W> for AsyncBincodeStream<S, R, W, D, O>
         where
             S: Unpin,
-            AsyncBincodeWriter<S, W, D>: futures_sink::Sink<W, Error = bincode::Error>,
+            AsyncBincodeWriter<S, W, D, O>: futures_sink::Sink<W, Error = bincode::Error>,
+            O: Options,
         {
             type Error = bincode::Error;
 
